@@ -1,0 +1,11 @@
+# PlatformIO 构建产物
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# 系统/编辑器
+.DS_Store
+*.pyc
+__pycache__/
+.idea/
+.vscode/

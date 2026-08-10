@@ -1,0 +1,10 @@
+# 演示词表：每行 word|phonetic|meaning
+# meaning 内多行用字面 \n 表示（固件解析时还原为换行）
+apple|ˈæpl|n. 苹果
+algorithm|ˈælɡərɪðəm|n. 算法
+perseverance|ˌpɜːrsɪˈvɪərəns|n. 毅力；坚持不懈
+coincidence|koʊˈɪnsɪdəns|n. 巧合
+optimism|ˈɑːptɪmɪzəm|n. 乐观\nn. 乐观主义
+experience|ɪkˈspɪəriəns|n. 经验；经历\nvt. 体验
+knowledge|ˈnɑːlɪdʒ|n. 知识；学问
+perspective|pərˈspektɪv|n. 观点；透视
