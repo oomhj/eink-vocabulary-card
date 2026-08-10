@@ -192,14 +192,14 @@ static uint8_t mvToPercent(uint16_t mv)
 // ---------------- 状态（供渲染读页码） ----------------
 typedef struct {
     uint32_t magic;        // RTC_STATE_MAGIC
+    uint32_t randMix;      // 随机混合种子（LCG 每次唤醒自增 → RST 唤醒也各不相同）
     uint16_t roundCount;   // 本轮已刷词数（满 wordCount 归 1）
     uint16_t cycleCount;   // 总轮数
     uint16_t lastIndex;    // 上次词索引（防重复）
+    uint16_t wordCount;    // 词库词条数（缓存，唤醒免扫词库第一趟）
     uint8_t  fastCount;    // 距上次全刷的快刷次数
     uint8_t  saveCount;    // 距上次 LittleFS 保存次数
-    uint16_t wordCount;    // 词库词条数（缓存，唤醒免扫词库第一趟）
-    uint8_t  pad[2];       // 对齐到 16B（RTC 读写要求 4 字节对齐）
-} State;
+} State;   // 编译器补齐到 20B（RTC 读写要求 4 对齐）
 static State st;
 
 // ---------------- 渲染 ----------------
@@ -300,7 +300,7 @@ static void renderPlaceholder()
 }
 
 // ---------------- 状态持久化 ----------------
-#define RTC_STATE_MAGIC  0x57433101     // "WC1\x01"（+1 使旧状态失效，强制重扫词库）
+#define RTC_STATE_MAGIC  0x57433102     // "WC1\x02"（+1 使旧状态失效，强制重扫词库+重置随机）
 #define SLEEP_US         (60UL * 1000000UL)
 #define FULL_EVERY       20              // 每 20 次快刷全刷一次，清残影
 #define SAVE_EVERY       10              // 每 10 次刷新存一次 LittleFS，省 flash 磨损
@@ -367,7 +367,6 @@ void setup()
     Serial.begin(115200);
 #endif
     delay(20);                                // 上电稳定（原 50ms 缩短）
-    randomSeed(ESP.random());                 // ESP8266 硬件随机种子
 #if DEBUG_SERIAL
     Serial.printf("[wc] reset: %s\n", ESP.getResetReason().c_str());
 #endif
@@ -383,6 +382,11 @@ void setup()
             st.lastIndex = 0xFFFF;
         }
     }
+
+    // 随机种子：ESP.random() 在 RF 关闭(RF_DISABLED)的 RST 唤醒下值不变 → 词会来回重复。
+    // 混入 RTC 持久化的 randMix（LCG 每次唤醒自增），保证每次唤醒随机不同。
+    st.randMix = st.randMix * 1664525u + 1013904223u;
+    randomSeed(ESP.random() ^ st.randMix);
 
     // 本次是否全刷：冷启动（屏需干净）或快刷计数到点（清残影）
     bool wantFull = (st.fastCount >= FULL_EVERY);
