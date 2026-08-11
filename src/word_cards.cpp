@@ -19,12 +19,15 @@
 #include <string.h>
 #include <SPI.h>
 #include <GxEPD2_BW.h>
+#include <GxEPD2_3C.h>   // 三色屏（红/黑/白）GDEY0213Z98 用
 #include <U8g2_for_Adafruit_GFX.h>
 #include <LittleFS.h>
 #include "dict_ielts.h"
 
 // ---------------- 屏幕选择 ----------------
-// 1 = SSD1680 屏（GxEPD2_213_B74，快刷好、对比度好）；0 = IL3895/GDE0213B1 屏（GxEPD2_213）
+// USE_Z98C=1  三色屏（红/黑/白）GDEY0213Z98（SSD1680，250×122）；无快刷，每次全刷 ~15s
+// USE_SSD1680=1 SSD1680 屏（GxEPD2_213_B74，快刷好、对比度好）；0 = IL3895/GDE0213B1 屏（GxEPD2_213）
+#define USE_Z98C     0
 #define USE_SSD1680  0
 
 // ---------------- 调试 ----------------
@@ -39,7 +42,11 @@
 #define PIN_BAT_EN    12    // 电池采样使能（HIGH 接通分压，见 hardware.md §10）
 
 // ---------------- 屏幕 ----------------
-#if USE_SSD1680
+#if USE_Z98C
+GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(
+    GxEPD2_213_Z98c(/*CS=*/PIN_EPD_CS, /*DC=*/PIN_EPD_DC,
+                    /*RST=*/PIN_EPD_RST, /*BUSY=*/PIN_EPD_BUSY));
+#elif USE_SSD1680
 GxEPD2_BW<GxEPD2_213_B74, GxEPD2_213_B74::HEIGHT> display(
     GxEPD2_213_B74(/*CS=*/PIN_EPD_CS, /*DC=*/PIN_EPD_DC,
                    /*RST=*/PIN_EPD_RST, /*BUSY=*/PIN_EPD_BUSY));
@@ -245,12 +252,18 @@ static void renderCard(uint16_t n, bool fast)
         u8g2Fonts.setCursor(margin, 26);
         u8g2Fonts.print(cur.word);
 
-        // 音标（左对齐）
+        // 音标（左对齐）；三色屏用红色，验证红平面
         if (cur.phonetic[0]) {
             u8g2Fonts.setFont(u8g2_font_helvR14_tf);
             u8g2Fonts.setFontMode(1);
+#if USE_Z98C
+            u8g2Fonts.setForegroundColor(GxEPD_RED);
+#endif
             u8g2Fonts.setCursor(margin, 46);
             u8g2Fonts.print(cur.phonetic);
+#if USE_Z98C
+            u8g2Fonts.setForegroundColor(GxEPD_BLACK);   // 复位，后续内容仍黑色
+#endif
         }
 
         // 分隔线
@@ -302,7 +315,7 @@ static void renderPlaceholder()
 // ---------------- 状态持久化 ----------------
 #define RTC_STATE_MAGIC  0x57433102     // "WC1\x02"（+1 使旧状态失效，强制重扫词库+重置随机）
 #define SLEEP_US         (60UL * 1000000UL)
-#define FULL_EVERY       20              // 每 20 次快刷全刷一次，清残影
+#define FULL_EVERY       10              // 每 10 次快刷全刷一次，清残影（IL3895 残影积累快，20 次太脏）
 #define SAVE_EVERY       10              // 每 10 次刷新存一次 LittleFS，省 flash 磨损
 #define STATE_FILE       "/wc_state.bin"
 
@@ -364,7 +377,7 @@ static void pickNextWord(bool forceFull)
 void setup()
 {
 #if DEBUG_SERIAL
-    Serial.begin(115200);
+    Serial.begin(74880);                 // 与 boot ROM 波特率一致，rst cause 与日志同屏可读
 #endif
     delay(20);                                // 上电稳定（原 50ms 缩短）
 #if DEBUG_SERIAL
