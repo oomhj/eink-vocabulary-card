@@ -29,6 +29,7 @@
 // USE_SSD1680=1 SSD1680 屏（GxEPD2_213_B74，快刷好、对比度好）；0 = IL3895/GDE0213B1 屏（GxEPD2_213）
 #define USE_Z98C     0
 #define USE_SSD1680  0
+#define USE_PARTIAL_WINDOW 0     // 局刷：只刷内容区窗口；实测 IL3895 子窗口局刷花屏，暂禁用（0=整屏快刷）
 
 // ---------------- 调试 ----------------
 // 生产可置 0：关掉 Serial 输出（省启动/刷新时间；GxEPD2 诊断也已关）
@@ -285,9 +286,17 @@ static void renderCard(uint16_t n, bool fast)
         u8g2Fonts.print(buf);
     }
 
-    // 刷新：fast=true → display(true) 快刷（触发 _Init_Part + 快刷 LUT）；
-    //       fast=false → display(false) 全刷。随后屏深睡。
-    display.display(fast);
+    // 刷新：
+    //   fast=true + 局刷  → setPartialWindow 只刷内容区窗口（排除右下角页码，缩小残影面）+ 快刷 LUT
+    //   fast=true + 非局刷 → display(true) 整屏快刷
+    //   fast=false         → display(false) 全刷。随后屏深睡。
+    if (fast && USE_PARTIAL_WINDOW) {
+        display.setPartialWindow(0, 0, W, 104);   // 局刷窗口：内容区（词/音标/释义到 y≈98）
+        display.nextPage();                        // _pages==1：写缓冲 + 局刷刷新（含快刷第二相位）
+        display.setFullWindow();                   // 复位窗口，避免下次全刷错乱
+    } else {
+        display.display(fast);
+    }
     display.hibernate();
     Serial.printf("[wc] card %u/%u %s (%s)\n", n + 1, wordCount, cur.word, fast ? "FAST" : "FULL");
 }
