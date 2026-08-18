@@ -52,7 +52,7 @@ python3 tools/gen_dict_h.py --level ielts --out src/dict_ielts.h
 ## 分支
 
 - `main` — 单词卡固件（当前在用）
-- `ink-driver-test` — 屏型号探针/实验（`epd_driver_probe`、OPM021EB UC8151D 自定义类）
+- `ink-driver-test` — 屏型号探针/实验（独立 fork 为 [eink-driver-test](https://github.com/oomhj/eink-driver-test) 项目，同 `photo-album`）
 - `daily-calendar` / `photo-album` — 其他 APP（独立 fork）
 
 ## 文档
