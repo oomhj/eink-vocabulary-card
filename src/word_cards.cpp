@@ -7,7 +7,8 @@
  *              - 快刷为主，每 20 次全刷清残影；计数 RTC+LittleFS 断电保持
  *
  *            关键移植点（ESP8266）：
- *              - 驱动类可切：USE_SSD1680=1 → GxEPD2_213_B74(SSD1680)；=0 → GxEPD2_213(GDE0213B1/IL3895)
+ *              - 驱动类可切：USE_SSD1680=1 → GxEPD2_213_B74(SSD1680)；=0 → GxEPD2_213_HINK
+ *                (HINK-E0213A04-G01 实物 IL3895，克隆自库 GxEPD2_213，仅 VCOM 0x2C=0x18，见 hink_e0213.h)
  *              - 词库在 PROGMEM，所有读取用 pgm_read_byte（ESP8266 flash 只支持 32 位访问，
  *                单字节直读会 LoadStoreError；u8g2_fonts_flash.h 已把 u8x8_pgm_read 改为 pgm_read_byte）
  *              - 中文字体统一 wqy16（参考的双字号因 flash 1MB 上限只能留一个）
@@ -23,10 +24,12 @@
 #include <U8g2_for_Adafruit_GFX.h>
 #include <LittleFS.h>
 #include "dict_ielts.h"
+#include "hink_e0213.h"   // HINK-E0213A04-G01 自定义 IL3895 类（VCOM 0x2C=0x18）
 
 // ---------------- 屏幕选择 ----------------
 // USE_Z98C=1  三色屏（红/黑/白）GDEY0213Z98（SSD1680，250×122）；无快刷，每次全刷 ~15s
-// USE_SSD1680=1 SSD1680 屏（GxEPD2_213_B74，快刷好、对比度好）；0 = IL3895/GDE0213B1 屏（GxEPD2_213）
+// USE_SSD1680=1 SSD1680 屏（GxEPD2_213_B74，快刷好、对比度好）；
+// 0 = HINK-E0213A04-G01（IL3895，自定义类 GxEPD2_213_HINK，VCOM 0x2C 实测调为 0x18）
 #define USE_Z98C     0
 #define USE_SSD1680  0
 #define USE_PARTIAL_WINDOW 0     // 局刷：只刷内容区窗口；实测 IL3895 子窗口局刷花屏，暂禁用（0=整屏快刷）
@@ -52,9 +55,9 @@ GxEPD2_BW<GxEPD2_213_B74, GxEPD2_213_B74::HEIGHT> display(
     GxEPD2_213_B74(/*CS=*/PIN_EPD_CS, /*DC=*/PIN_EPD_DC,
                    /*RST=*/PIN_EPD_RST, /*BUSY=*/PIN_EPD_BUSY));
 #else
-GxEPD2_BW<GxEPD2_213, GxEPD2_213::HEIGHT> display(
-    GxEPD2_213(/*CS=*/PIN_EPD_CS, /*DC=*/PIN_EPD_DC,
-               /*RST=*/PIN_EPD_RST, /*BUSY=*/PIN_EPD_BUSY));
+GxEPD2_BW<GxEPD2_213_HINK, GxEPD2_213_HINK::HEIGHT> display(
+    GxEPD2_213_HINK(/*CS=*/PIN_EPD_CS, /*DC=*/PIN_EPD_DC,
+                    /*RST=*/PIN_EPD_RST, /*BUSY=*/PIN_EPD_BUSY));
 #endif
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 

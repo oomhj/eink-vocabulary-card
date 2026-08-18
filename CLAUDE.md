@@ -9,7 +9,7 @@ An offline, ultra-low-power **雅思单词卡** (IELTS word-card) for ESP8266 + 
 **Firmware status**: `src/word_cards.cpp` is the **ESP8266 firmware** (buildable, in use). `src/word_cards_ref.cpp` is **ESP32 code, reference-only** — the behavioral reference (boot → deep-sleep 60s → refresh a random word → repeat; SW4/RST button for manual refresh). It uses ESP32-only GPIOs/APIs and is excluded from the `esp8266` build via `build_src_filter`.
 
 Key ESP8266 porting facts (see `docs/ink_displays.md` §10 for the driver findings):
-- **Screen driver is switchable**: `USE_SSD1680` in `word_cards.cpp` — `1`=SSD1680 (`GxEPD2_213_B74`), `0`=IL3895/GDE0213B1 (`GxEPD2_213`). Both verified on hardware; SSD1680 preferred (fast refresh clean, full 1.9s vs IL3895 3.9s).
+- **Screen driver is switchable**: `USE_SSD1680` in `word_cards.cpp` — `1`=SSD1680 (`GxEPD2_213_B74`), `0`=HINK-E0213A04-G01 IL3895 (`GxEPD2_213_HINK` — custom class in `src/hink_e0213.*`, cloned from the lib's `GxEPD2_213`, only VCOM 0x2C=0x18 instead of lib default 0xa8). Both verified on hardware; SSD1680 preferred (fast refresh clean, full 1.9s vs IL3895 3.9s).
 - **Flash data reads need `pgm_read_byte`** (ESP8266 flash-mapped region only supports 32-bit access; direct byte reads → LoadStoreError). `src/u8g2_fonts_flash.h` redefines u8g2's `u8x8_pgm_read` to `pgm_read_byte`, so u8g2 fonts in flash work. Any dict/text access in PROGMEM must use `pgm_read_byte`.
 - **Single Chinese font** (wqy14, 252KB): the reference's wqy16/wqy14 dual-font scheme doesn't fit the ~1MB `.irom0.text` cap. Flash budget ~94%.
 
