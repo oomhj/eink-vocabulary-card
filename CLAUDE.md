@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An offline, ultra-low-power **雅思单词卡** (IELTS word-card) for ESP8266 + 2.13" E-Ink display. 当前在用屏为 **HINK-E0213A04-G01（IL3895）**，SSD1680 / 三色屏亦支持（见下文屏幕切换）。Pure offline: no BLE/WiFi/radio is ever enabled. Target hardware is the ESP-12S board in `Schematic_213墨水屏单词卡.png`（同目录另有 .svg）(see `docs/hardware.md` for the full pin map).
 
-**分支**：`main` = 单词卡固件（本文档范围）；`ink-driver-test` = 屏型号探针/实验（已独立为 [eink-driver-test](https://github.com/oomhj/eink-driver-test) 项目，同 `photo-album`，main 上无这些文件）；`daily-calendar` / `photo-album` = 其他 APP（自单词卡基线独立 fork）。
+**分支**：`main` = 单词卡固件（本文档范围）；`ink-driver-test` = 屏型号探针/实验（已独立为 [eink-driver-test](https://github.com/oomhj/eink-driver-test) 项目，同 `photo-album`，main 上无这些文件）；`photo-album` = 相册（自单词卡基线独立 fork 为 eink-album）；`daily-calendar` = 每日日历（已独立为 [eink-calendar](https://github.com/oomhj/eink-calendar) 项目）。
 
 **Firmware status**: `src/word_cards.cpp` is the **ESP8266 firmware** (buildable, in use). `src/word_cards_ref.cpp` is **ESP32 code, reference-only** — the behavioral reference (boot → deep-sleep 60s → refresh a random word → repeat; SW4/RST button for manual refresh). It uses ESP32-only GPIOs/APIs and is excluded from the `esp8266` build via `build_src_filter`.
 
