@@ -9,3 +9,6 @@
 __pycache__/
 .idea/
 .vscode/
+
+# 串口采集日志
+logs/

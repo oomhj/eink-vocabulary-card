@@ -1,10 +1,11 @@
 /**
  * @file      word_cards.cpp
  * @brief     ESP8266 雅思单词卡固件（纯离线低功耗）
- *            行为对齐参考固件 src/word_cards_ref.cpp（ESP32 参考，行为基准）：
- *              - 深睡 60s 自动刷一个随机词；SW4(唤醒键/RST) 手动刷（一次按下=一个词）
+ *            行为：正常运行不睡眠——每 60s 自动刷一个随机词；SW2(IO0) 或 RST(SW4) 手动刷（一次=一个词）：
+ *              - 上电/按 RST = 整机重启 = 刷一个随机词；之后常驻循环：60s 定时自动刷词，
+ *                或按键 SW2(IO0) 刷词（睡眠策略见文件尾注记：深睡/FPM light sleep 均不可用）
  *              - 右上角电量图标（5 段），右下角 R<轮> <本轮词数>/<词库数>
- *              - 快刷为主，每 20 次全刷清残影；计数 RTC+LittleFS 断电保持
+ *              - 每次刷词正常全刷（无快刷/残影管理）；计数每次刷词存 LittleFS 断电保持
  *
  *            关键移植点（ESP8266）：
  *              - 驱动类可切：USE_SSD1680=1 → GxEPD2_213_B74(SSD1680)；=0 → GxEPD2_213_HINK
@@ -12,7 +13,7 @@
  *              - 词库在 PROGMEM，所有读取用 pgm_read_byte（ESP8266 flash 只支持 32 位访问，
  *                单字节直读会 LoadStoreError；u8g2_fonts_flash.h 已把 u8x8_pgm_read 改为 pgm_read_byte）
  *              - 中文字体统一 wqy16（参考的双字号因 flash 1MB 上限只能留一个）
- *              - 深睡唤醒=整机重启，工作态存 RTC 内存，断电保持存 LittleFS
+ *              - 上电/按 RST=整机重启；工作态每次唤醒存 LittleFS（无 RTC 内存操作）
  *
  * 用法: pio run -e esp8266 -t upload
  */
@@ -32,7 +33,6 @@
 // 0 = HINK-E0213A04-G01（IL3895，自定义类 GxEPD2_213_HINK，VCOM 0x2C 实测调为 0x18）
 #define USE_Z98C     0
 #define USE_SSD1680  0
-#define USE_PARTIAL_WINDOW 0     // 局刷：只刷内容区窗口；实测 IL3895 子窗口局刷花屏，暂禁用（0=整屏快刷）
 
 // ---------------- 调试 ----------------
 // 生产可置 0：关掉 Serial 输出（省启动/刷新时间；GxEPD2 诊断也已关）
@@ -208,15 +208,15 @@ typedef struct {
     uint16_t cycleCount;   // 总轮数
     uint16_t lastIndex;    // 上次词索引（防重复）
     uint16_t wordCount;    // 词库词条数（缓存，唤醒免扫词库第一趟）
-    uint8_t  fastCount;    // 距上次全刷的快刷次数
-    uint8_t  saveCount;    // 距上次 LittleFS 保存次数
-} State;   // 编译器补齐到 20B（RTC 读写要求 4 对齐）
+    uint8_t  fastCount;    // 距上次全刷的快刷次数（满 FULL_EVERY 全刷清残影）
+} State;   // 18B → 补齐 20B（4 对齐）
 static State st;
 
 // ---------------- 渲染 ----------------
 /** 渲染当前词卡 — 横屏 250×122：
- *  单词/音标/分隔线在上，中文释义(wqy16)在下，页码右下角
- *  fast=true 快刷；false 全刷（由 display(false/true) 决定，含 _Init_Part 触发） */
+ *  单词/音标/分隔线在上，中文释义(wqy14)在下，页码右下角
+ *  fast=true 整屏快刷（~0.5s，轻微残影）；false 全刷（~4s，干净，清残影）
+ *  快刷后 EPD 保持上电（连续快刷无需重初始化）；全刷后 GxEPD2 自动 powerOff（RAM 保留，下次快刷自动 _Init_Part） */
 static void renderCard(uint16_t n, bool fast)
 {
     const int16_t W = display.width();    // 250（横屏）
@@ -289,18 +289,9 @@ static void renderCard(uint16_t n, bool fast)
         u8g2Fonts.print(buf);
     }
 
-    // 刷新：
-    //   fast=true + 局刷  → setPartialWindow 只刷内容区窗口（排除右下角页码，缩小残影面）+ 快刷 LUT
-    //   fast=true + 非局刷 → display(true) 整屏快刷
-    //   fast=false         → display(false) 全刷。随后屏深睡。
-    if (fast && USE_PARTIAL_WINDOW) {
-        display.setPartialWindow(0, 0, W, 104);   // 局刷窗口：内容区（词/音标/释义到 y≈98）
-        display.nextPage();                        // _pages==1：写缓冲 + 局刷刷新（含快刷第二相位）
-        display.setFullWindow();                   // 复位窗口，避免下次全刷错乱
-    } else {
-        display.display(fast);
-    }
-    display.hibernate();
+    // 刷新：fast=整屏快刷（display(true)，残影靠每 FULL_EVERY 次全刷清除）；
+    //       full=全刷（display(false)，清残影）。不再 hibernate（连续快刷需保持控制器上电与 RAM）。
+    display.display(fast);
     Serial.printf("[wc] card %u/%u %s (%s)\n", n + 1, wordCount, cur.word, fast ? "FAST" : "FULL");
 }
 
@@ -321,27 +312,13 @@ static void renderPlaceholder()
         u8g2Fonts.print(t1);
     }
     display.display(false);
-    display.hibernate();
 }
 
 // ---------------- 状态持久化 ----------------
-#define RTC_STATE_MAGIC  0x57433102     // "WC1\x02"（+1 使旧状态失效，强制重扫词库+重置随机）
-#define SLEEP_US         (60UL * 1000000UL)
-#define FULL_EVERY       10              // 每 10 次快刷全刷一次，清残影（IL3895 残影积累快，20 次太脏）
-#define SAVE_EVERY       10              // 每 10 次刷新存一次 LittleFS，省 flash 磨损
+#define RTC_STATE_MAGIC  0x57433104     // "WC1\x04"
 #define STATE_FILE       "/wc_state.bin"
-
-static bool stateLoadRtc()
-{
-    if (ESP.rtcUserMemoryRead(0, (uint32_t*)&st, sizeof(st)))
-        if (st.magic == RTC_STATE_MAGIC) return true;
-    return false;
-}
-
-static void stateSaveRtc()
-{
-    ESP.rtcUserMemoryWrite(0, (uint32_t*)&st, sizeof(st));
-}
+#define FULL_EVERY       10              // 每 10 次快刷全刷一次，清残影（IL3895 残影积累快）
+#define SLEEP_MS         (60UL * 1000UL)
 
 static bool stateLoadFlash()
 {
@@ -376,16 +353,14 @@ static void pickNextWord(bool forceFull)
     st.roundCount++;                          // 本轮计数 +1，满一轮归 1 进下一轮
     if (st.roundCount > wordCount) { st.roundCount = 1; st.cycleCount++; }
 
-    if (++st.saveCount >= SAVE_EVERY) { st.saveCount = 0; stateSaveFlash(); }   // 断电保持
-
-    bool full = forceFull || (st.fastCount >= FULL_EVERY);   // 冷启动或快刷计数到点 → 全刷
+    bool full = forceFull || (st.fastCount >= FULL_EVERY);   // 冷启动/计数到点 → 全刷清残影
     if (full) st.fastCount = 0; else st.fastCount++;
 
     parseNth(n);
-    renderCard(n, !full);                       // renderCard 第二参是 fast（true=快刷）
+    renderCard(n, !full);
 }
 
-// ---------------- setup（每次深睡唤醒都整机重启跑到这里） ----------------
+// ---------------- setup（每次上电/按 RST 都整机重启跑到这里） ----------------
 void setup()
 {
 #if DEBUG_SERIAL
@@ -396,31 +371,26 @@ void setup()
     Serial.printf("[wc] reset: %s\n", ESP.getResetReason().c_str());
 #endif
 
-    // 状态加载：RTC → LittleFS → 默认
-    bool rtcOk = stateLoadRtc();
-    bool coldBoot = !rtcOk;
-    if (!rtcOk) {
-        if (!stateLoadFlash()) {
-            memset(&st, 0, sizeof(st));
-            st.magic = RTC_STATE_MAGIC;
-            st.cycleCount = 1;
-            st.lastIndex = 0xFFFF;
-        }
+    // 状态加载：LittleFS → 默认（无 RTC 内存操作）
+    if (!stateLoadFlash()) {
+        memset(&st, 0, sizeof(st));
+        st.magic = RTC_STATE_MAGIC;
+        st.cycleCount = 1;
+        st.lastIndex = 0xFFFF;
     }
 
     // 随机种子：ESP.random() 在 RF 关闭(RF_DISABLED)的 RST 唤醒下值不变 → 词会来回重复。
-    // 混入 RTC 持久化的 randMix（LCG 每次唤醒自增），保证每次唤醒随机不同。
+    // 混入 LittleFS 持久化的 randMix（LCG 每次唤醒自增），保证每次唤醒随机不同。
     st.randMix = st.randMix * 1664525u + 1013904223u;
     randomSeed(ESP.random() ^ st.randMix);
 
-    // 本次是否全刷：冷启动（屏需干净）或快刷计数到点（清残影）
-    bool wantFull = (st.fastCount >= FULL_EVERY);
-    // display.init 第一参传 0 = 关 GxEPD2 串口诊断（省刷新时的打印开销）
-    display.init(0, coldBoot || wantFull, 2, false);
+    // display.init 第一参传 0 = 关 GxEPD2 串口诊断（省刷新时的打印开销）；
+    // 第二参恒 true：休眠唤醒也正常初始化屏幕（全刷清屏），无快刷/残影管理
+    display.init(0, true, 2, false);
     display.setRotation(3);
     u8g2Fonts.begin(display);
 
-    // 词库：唤醒时用 RTC 缓存的 wordCount，免第一趟扫描（省 ~50ms/次）；冷启动才扫
+    // 词库：唤醒时用 LittleFS 缓存的 wordCount，免第一趟扫描（省 ~50ms/次）；首次才扫
     wordCount = st.wordCount;
     if (wordCount == 0 || wordCount > DICT_WORDS) {
         wordCount = countEntries();
@@ -430,16 +400,38 @@ void setup()
     Serial.printf("[wc] dict %u words\n", wordCount);
 #endif
     if (wordCount > 0) {
-        pickNextWord(coldBoot);                 // 冷启动强制全刷（init(true) 已强制，这里同步日志/计数）
+        pickNextWord(true);                     // 首次全刷（冷启动屏需干净），不计入快刷计数
     } else {
         renderPlaceholder();
     }
 
-    stateSaveRtc();                           // 工作态存 RTC（跨深睡）
+    stateSaveFlash();                         // 工作态存 LittleFS（断电保持，下次重启续用）
+
+    // 睡眠策略（2026-08 定论）——不睡眠，正常运行：
+    //   - 深睡（ESP.deepSleep）RTC 定时唤醒：boot 首跳挂死（ets 后无 load，"一次失败一次成功"），
+    //     pinMode(16, WAKEUP_PULLUP) 实测未修复；
+    //   - FPM light sleep（wifi_fpm_do_sleep）：RF 关=不睡；RF 开=fpm_do_sleep 空指针崩溃
+    //     （Arduino core 3.x 移除 ESP.lightSleep() 的原因）。
+    //   → 直接正常运行：60s 定时自动刷词 + SW2(IO0) 按键刷词 + RST(SW4) 整机重启刷词。
 #if DEBUG_SERIAL
-    Serial.println("[wc] deep sleep 60s/word");
+    Serial.println("[wc] run; 60s/word, SW2(IO0) or RST(SW4) for next");
 #endif
-    ESP.deepSleep(SLEEP_US, WAKE_RF_DISABLED);   // 不返回；SW4(RST) 可立即唤醒
+    pinMode(0, INPUT_PULLUP);            // SW2 上键（IO0，串 R5 100Ω 接地，按下为低）
+    uint32_t lastMs = millis();
+    bool wantWord = false;
+    for ( ;; ) {
+        if (digitalRead(0) == LOW) {                 // SW2 按下
+            while (digitalRead(0) == LOW) delay(50); // 等松开（一次按下=一个词）
+            wantWord = true;
+        }
+        if (wantWord || millis() - lastMs >= SLEEP_MS) {  // 按键 或 60s 到：刷一个词
+            wantWord = false;
+            lastMs = millis();
+            pickNextWord(false);                // 快/全刷由 st.fastCount 决定（每 FULL_EVERY 次全刷清残影）
+            stateSaveFlash();
+        }
+        delay(50);
+    }
 }
 
 void loop() {}

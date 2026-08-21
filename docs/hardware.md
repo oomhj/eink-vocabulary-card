@@ -103,7 +103,7 @@ ESP-12S 共 16 脚，左 8（下→上：1~8）/ 右 8（下→上：16~9）：
 | 7 | IO13 | 显示屏 SDA | 15 | RXD0 | 烧录焊盘（外接 USB-TTL TX） |
 | 8 | VCC | 3.3V | 16 | TXD0 | 烧录焊盘（外接 USB-TTL RX） |
 
-> IO0/IO2/IO15 为启动 strap 引脚（IO0、IO2 需上电为高，IO15 需为低）；IO0 只接按键（上电按住=下载模式），IO2/IO15 接显示屏，上电时序需保证屏接口不干扰 strap 电平。
+> IO0/IO2/IO15 为启动 strap 引脚（IO0、IO2 需上电为高，IO15 需为低）；**IO15 在 BOOT 块有 10k 下拉到 GND**，保证上电 IO15 为低（boot mode (3,6)，SPI flash 启动正确 strap）。IO0 只接按键（上电按住=下载模式），IO2/IO15 接显示屏，上电时序需保证屏接口不干扰 strap 电平。（RST 释放瞬间偶发采样到 (3,7) 属瞬态，两种均为 SPI flash boot，不影响启动。）
 
 > ✅ **唤醒/复位电路（BOOT 块，2026-08 按 v2 原理图重新核对）**：SW4（唤醒键）经 R33(10k)+D4(MBR0530，阳极朝 RST 侧) 把 RST 网络拉低；RST 网络另有 C18(10nF)+10k 到 GND（隔直滤波，无直流负载）。原理图上 IO15/IO16/RST 三个 net flag 仅视觉相邻，**实为三个独立网络**。**烧录无需断开任何器件**：SW4 断开时 D4 支路开路，USB-TTL 可直接从 RST 焊盘干净复位进下载模式（2026-08 实测：烧录 + 定时深睡唤醒均正常，按键/二极管全程连接）。
 
@@ -253,13 +253,13 @@ IO12 ── R22(1k) ── Q6 栅极 ── R34(10k 下拉) ── GND
 | ESP32 API（参考固件） | ESP8266 替代 |
 |---|---|
 | `Preferences`（NVS） | EEPROM / LittleFS 文件 |
-| `esp_light_sleep_start()` | `ESP.deepSleep()` 或 light sleep |
-| `esp_sleep_enable_ext0_wakeup(GPIO_NUM_39)` | GPIO 唤醒（受引脚限制，RST 按键需走深睡复位） |
+| `esp_light_sleep_start()` | **固件当前不睡眠**（深睡/FPM light sleep 均实测不可用，见 `word_cards.cpp` 文件尾注记） |
+| `esp_sleep_enable_ext0_wakeup(GPIO_NUM_39)` | SW2(IO0) 轮询 / RST(SW4) 整机重启 |
 | `esp_random()` | `ESP.getRandom()` / `os_random()` |
 | `analogReadMilliVolts()` | `analogRead(A0)`（0–1V，10bit） |
 
-> ✅ **固件已落地（2026-08）**：`src/word_cards.cpp` 为 ESP8266 正式固件（深睡 60s 刷词、SW4/RST 手动刷、RTC+LittleFS 计数保持）。关键要点：
+> ✅ **固件已落地（2026-08）**：`src/word_cards.cpp` 为 ESP8266 正式固件（**不睡眠**：60s 定时自动刷词 + SW2(IO0) 按键 + SW4/RST 手动刷；快刷为主每 10 次全刷清残影；计数经 LittleFS 断电保持）。关键要点：
 > - **驱动类可切**：`USE_SSD1680`（1=SSD1680 `GxEPD2_213_B74`；0=IL3895 `GxEPD2_213`），两屏接线相同（IO15/IO5/IO2/IO4/IO13/IO14）。
 > - **flash 直读必须 `pgm_read_byte`**：ESP8266 flash 映射区只支持 32 位访问，直接字节读 → LoadStoreError（曾致固件空白）。`src/u8g2_fonts_flash.h` 已把 u8g2 的 `u8x8_pgm_read` 重定义为 `pgm_read_byte`。
-> - 中文字体单用 wqy14（~252KB，1MB 固件上限内）；快刷为主 + 每 20 次全刷清残影。
-> - 手动刷词用 **SW4（RST）**，上键 IO0 深睡无法唤醒、固件未用。
+> - 中文字体单用 wqy14（~252KB，1MB 固件上限内）；快刷为主 + 每 10 次全刷清残影（`FULL_EVERY=10`）。
+> - 手动刷词用 **SW2（IO0）或 SW4（RST）**：SW2 轮询按键（松手才刷，一次=一个词）；SW4 整机重启刷词。睡眠方案（深睡唤醒 boot 首跳挂死 / FPM light sleep 崩溃）详见 `word_cards.cpp` 文件尾注记。

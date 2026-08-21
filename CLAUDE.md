@@ -8,7 +8,7 @@ An offline, ultra-low-power **雅思单词卡** (IELTS word-card) for ESP8266 + 
 
 **分支**：`main` = 单词卡固件（本文档范围）；`ink-driver-test` = 屏型号探针/实验（已独立为 [eink-driver-test](https://github.com/oomhj/eink-driver-test) 项目，同 `photo-album`，main 上无这些文件）；`photo-album` = 相册（自单词卡基线独立 fork 为 eink-album）；`daily-calendar` = 每日日历（已独立为 [eink-calendar](https://github.com/oomhj/eink-calendar) 项目）。
 
-**Firmware status**: `src/word_cards.cpp` is the **ESP8266 firmware** (buildable, in use). `src/word_cards_ref.cpp` is **ESP32 code, reference-only** — the behavioral reference (boot → deep-sleep 60s → refresh a random word → repeat; SW4/RST button for manual refresh). It uses ESP32-only GPIOs/APIs and is excluded from the `esp8266` build via `build_src_filter`.
+**Firmware status**: `src/word_cards.cpp` is the **ESP8266 firmware** (buildable, in use) — 正常运行不休眠：60s 定时 + SW2(IO0)/RST 手动刷词。`src/word_cards_ref.cpp` is **ESP32 code, reference-only** — the behavioral reference (sleep 60s → refresh a random word → repeat; SW4/RST button for manual refresh). It uses ESP32-only GPIOs/APIs and is excluded from the `esp8266` build via `build_src_filter`.
 
 Key ESP8266 porting facts (see `docs/ink_displays.md` §10 for the driver findings):
 - **Screen driver is switchable**: `USE_Z98C` / `USE_SSD1680` in `word_cards.cpp` — `USE_Z98C=1`=三色屏（`GxEPD2_213_Z98c`，无快刷，每次全刷 ~15s）；`USE_SSD1680=1`=SSD1680（`GxEPD2_213_B74`）；两者均 `0`（默认）=HINK-E0213A04-G01 IL3895（`GxEPD2_213_HINK` — 本仓库自定义类 `src/hink_e0213.*`，克隆库 `GxEPD2_213`，仅 VCOM 0x2C=0x18 替代库默认 0xa8，见 `docs/ink_displays.md` §10.1）。各屏均已实物验证；SSD1680 快刷最佳（全刷 1.9s vs IL3895 3.9s）。
@@ -63,8 +63,8 @@ The full reference program is one file, `src/word_cards_ref.cpp` (ESP32 — see 
 
 - **词库访问** — 两趟扫描（不占 20KB 索引 RAM）：`countEntries()` 数词条、`parseNth(n)` 重扫到第 n 条解析（word/phonetic/meaning，`\n` 反转义）。
 - **渲染** — 布局同参考（横屏 250×122：词/音标/分隔线/中文释义/电量/页码）；中文统一 wqy14 单字体。
-- **刷新** — 快刷为主、每 `FULL_EVERY`=10 次全刷清残影（IL3895 残影积累快，20 太脏）；刷完 `display.hibernate()` 屏深睡。
-- **电源管理** — `ESP.deepSleep()` 60s/词；唤醒=整机重启，工作态存 RTC 内存（`State` + magic），断电保持存 LittleFS（`/wc_state.bin`，每 10 次存一次省 flash 磨损）；RST（SW4）手动刷，一次按下=一个词。
+- **刷新** — 10 次快刷 + 1 次全刷清残影：`st.fastCount` 计数（随 LittleFS 持久化），满 `FULL_EVERY=10` 全刷；`renderCard(n, fast)` 快刷走 `display(true)` 整屏快刷（~0.5s，轻微残影）、全刷走 `display(false)`（~4s，清残影）。开机首词强制全刷（`pickNextWord(true)`，屏需干净）。**不 `display.hibernate()`**——连续快刷需控制器保持上电与 RAM（全刷后 GxEPD2 自动 powerOff，RAM 保留）。
+- **运行/电源** — **不睡眠，正常运行**：深睡与 FPM light sleep 在这块板上均不可用（见 `word_cards.cpp` 文件尾注记）——深睡 RTC 定时唤醒 boot 首跳挂死（`ets` 后无 `load`，`pinMode(16, WAKEUP_PULLUP)` 实测未修复）；FPM light sleep（`wifi_fpm_do_sleep`）RF 关=不睡、RF 开=空指针崩溃（Arduino core 3.x 移除 `ESP.lightSleep()` 的原因）。行为：60s 定时自动刷词 + SW2(IO0) 按键刷词（一次按下=一个词，松手才刷）+ RST(SW4) 整机重启刷词；工作态每次刷词存 LittleFS（`/wc_state.bin`，`State` + magic，无 RTC 内存操作）。
 
 ## Hardware wiring
 
@@ -85,4 +85,4 @@ Full schematic-derived hardware reference: **`docs/hardware.md`** (display FPC p
 
 > ⚠️ **Firmware is ESP32 reference code**: `word_cards_ref.cpp` uses ESP32-only GPIOs (5/17/16/4, 39, 19, 35) and APIs (`Preferences`, `esp_light_sleep_start`, `esp_random`, `analogReadMilliVolts`). The schematic/platformio.ini target ESP8266, where GPIO17/39/19/35 don't exist — it is **not** meant to compile here. Use it as the behavioral reference when writing new ESP8266 firmware; `docs/hardware.md` §12 has the pin/API porting table.
 
-Build config: 4MB module, `huge_app.csv` partition (needed for the ~247KB dict), LittleFS, `flash_mode=qio` @ 默认 40MHz（26.7MHz 降频已撤回——boot 卡死疑为板子设计问题；如需验证可临时加 `board_build.f_flash = 26700000L`）。Flash 预算 ~94%。Dependencies: `zinggjm/GxEPD2` and `olikraus/U8g2_for_Adafruit_GFX`。
+Build config: 4MB module, `huge_app.csv` partition (needed for the ~247KB dict), LittleFS, `flash_mode=qio` @ **26.7MHz**（GD25Q32 QIO@40MHz 偏临界，连屏启动时 boot ROM 报 `pll_cal exceeds 2ms`；26.7MHz 与 eink-album 一致，恢复 69453aa 的降频——3a1265e 撤回结论有误）。Flash 预算 ~94%。Dependencies: `zinggjm/GxEPD2` and `olikraus/U8g2_for_Adafruit_GFX`。
