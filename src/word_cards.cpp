@@ -430,10 +430,12 @@ void setup()
     st.randMix = st.randMix * 1664525u + 1013904223u;
     randomSeed(ESP.random() ^ st.randMix);
 
-    // 本次是否全刷：冷启动（屏需干净）或快刷计数到点（清残影）
-    bool wantFull = (st.fastCount >= FULL_EVERY);
-    // display.init 第一参传 0 = 关 GxEPD2 串口诊断（省刷新时的打印开销）
-    display.init(0, coldBoot || wantFull, 2, false);
+    // 全刷/快刷由 pickNextWord 决定（renderCard 里 display.display(fast) 单次刷新）。
+    // display.init 第二参 initial 恒传 **false**：
+    //   若传 true（coldBoot||wantFull）→ _initial_write=true → writeImage 里先 writeScreenBuffer→clearScreen
+    //   （clearScreen 在 _initial_refresh=true 时做 _Init_Full+_Update_Full 白屏全刷 + 末尾 _Init_Part+_Update_Part 白屏快刷），
+    //   再叠加 refresh(false) 的内容 _Update_Full = 全刷实际刷 2~3 遍（~8s）。initial=false 只刷 1 遍（快刷一直正常就是走这条）。
+    display.init(0, false, 2, false);   // 第一参 0 = 关 GxEPD2 串口诊断
     display.setRotation(3);
     u8g2Fonts.begin(display);
 
@@ -447,7 +449,7 @@ void setup()
     Serial.printf("[wc] dict %u words\n", wordCount);
 #endif
     if (wordCount > 0) {
-        pickNextWord(coldBoot);                 // 冷启动强制全刷（init(true) 已强制，这里同步日志/计数）
+        pickNextWord(coldBoot);                 // 冷启动强制全刷（清屏需干净）；full/fast 由 pickNextWord 决定
     } else {
         renderPlaceholder();
     }
