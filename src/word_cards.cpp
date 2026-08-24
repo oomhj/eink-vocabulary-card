@@ -163,6 +163,19 @@ static void drawWrappedText(const char* text, int16_t startX, int16_t startY,
 }
 
 // ---------------- 电池 ----------------
+/**
+ * 分压链（2026-08 改版电路，见 电量检测.png / hardware.md §10）：
+ *   BAT+ → Q5(SI2305 P-MOS，高边开关) → R15(100K) → (ADC 结点) → R16(150K) → GND
+ *   IO12(=0V)：Q1(SI2302) 截止 → Q5 栅极=BAT+(高) → Q5 关断，采样回路断开，静态≈0
+ *   IO12(=3.3V)：Q1 导通 → Q5 栅极拉至 GND → Q5 导通(V_GS≈-V_BAT) → BAT+ 接入分压
+ *   R14 不在分压链（它是 Q5 栅极拉到 BAT+ 的默认关断电阻，只起门控），C20(10nf) 滤波。
+ *   V_adc = V_bat × R16/(R15+R16) = ×150/250 = 0.6，故 V_bat = V_adc × 250/150 = ×5/3。
+ */
+#define BATT_DIV_NUM  250UL    // R15+R16（kΩ）= 100+150（R14 不参与分压）
+#define BATT_DIV_DEN  150UL    // R16（ADC 结点到 GND，kΩ）
+#define BATT_ADC_VREF 3300UL   // ADC 满量程 mV（3.3V 基准；对照万用表校准）
+#define BATT_SAMPLE_N 16       // 采样次数（取均值降噪）
+
 /** 聚合物锂电池放电曲线（电压 mV -> 百分比，两点间线性插值，照抄参考） */
 static const uint16_t battCurve[][2] = {
     {4200, 100}, {4100, 88}, {4000, 75}, {3950, 66}, {3900, 58},
@@ -171,17 +184,21 @@ static const uint16_t battCurve[][2] = {
 };
 #define BATT_CURVE_N  (sizeof(battCurve) / sizeof(battCurve[0]))
 
-/** 读电池电压（IO12 接通分压 → A0(TOUT 0–1V) → ×5.7 还原，上限 4.2V） */
+/** 读电池电压（IO12 栅控导通 Q5 高边开关 → A0 采样 → 按分压比 ×250/150(=5/3) 还原，上限 4.2V） */
 static uint16_t readBatteryMv()
 {
-    digitalWrite(PIN_BAT_EN, HIGH);
-    delay(5);                                         // 分压稳定（缩短节省活跃时间）
+    digitalWrite(PIN_BAT_EN, HIGH);                   // Q1 导通，接通 BAT+ 分压链
+    delay(30);                                        // C20(10nf)×~250k 分压稳定（τ≈0.6ms，留裕量）
     uint32_t sum = 0;
-    for (int i = 0; i < 8; i++) sum += analogRead(A0);
-    digitalWrite(PIN_BAT_EN, LOW);
-    uint16_t mv = (uint16_t)((uint32_t)(sum / 8) * 5700UL / 1023UL);    // ×1k/(4.7k+1k)=×5.7
+    for (int i = 0; i < BATT_SAMPLE_N; i++) sum += analogRead(A0);
+    digitalWrite(PIN_BAT_EN, LOW);                    // 断开分压链，省活跃电流
+    uint16_t raw = (uint16_t)(sum / BATT_SAMPLE_N);
+    uint32_t mv = (uint32_t)raw * BATT_ADC_VREF * BATT_DIV_NUM / (1023UL * BATT_DIV_DEN);  // ×250/150
     if (mv > 4200) mv = 4200;
-    return mv;
+#if DEBUG_SERIAL
+    Serial.printf("[wc] batt raw=%u → %umV\n", raw, (unsigned)mv);   // 定标：对照万用表电池电压
+#endif
+    return (uint16_t)mv;
 }
 
 /** 电池电压 -> 百分比（查表 + 线性插值，照抄参考） */
