@@ -103,11 +103,11 @@ ESP-12S 共 16 脚，左 8（下→上：1~8）/ 右 8（下→上：16~9）：
 | 7 | IO13 | 显示屏 SDA | 15 | RXD0 | 烧录焊盘（外接 USB-TTL TX） |
 | 8 | VCC | 3.3V | 16 | TXD0 | 烧录焊盘（外接 USB-TTL RX） |
 
-> IO0/IO2/IO15 为启动 strap 引脚（IO0、IO2 需上电为高，IO15 需为低）；**IO15 在 BOOT 块有 10k 下拉到 GND**，保证上电 IO15 为低（boot mode (3,6)，SPI flash 启动正确 strap）。IO0 只接按键（上电按住=下载模式），IO2/IO15 接显示屏，上电时序需保证屏接口不干扰 strap 电平。（RST 释放瞬间偶发采样到 (3,7) 属瞬态，两种均为 SPI flash boot，不影响启动。）
+> IO0/IO2/IO15 为启动 strap 引脚（IO0、IO2 需上电为高，IO15 需为低）；**IO15 在 BOOT 块有 10k 下拉到 GND**，保证上电 IO15 为低（boot mode (3,6)，SPI flash 启动正确 strap）。IO0 只接按键（上电按住=下载模式），IO2/IO15 接显示屏，上电时序需保证屏接口不干扰 strap 电平。（IO7 上拉修复后 boot mode 稳定为 **(3,7)**，两种均为 SPI flash boot，正常；历史日志里 (3,7) 曾为 RST 释放瞬态采样值。）
 
 > ✅ **唤醒/复位电路（BOOT 块，2026-08 按 v2 原理图重新核对）**：SW4（唤醒键）经 R33(10k)+D4(MBR0530，阳极朝 RST 侧) 把 RST 网络拉低；RST 网络另有 C18(10nF)+10k 到 GND（隔直滤波，无直流负载）。原理图上 IO15/IO16/RST 三个 net flag 仅视觉相邻，**实为三个独立网络**。**烧录无需断开任何器件**：SW4 断开时 D4 支路开路，USB-TTL 可直接从 RST 焊盘干净复位进下载模式（2026-08 实测：烧录 + 定时深睡唤醒均正常，按键/二极管全程连接）。
 
-> ⚠️ **RST 二次按压 / 深睡定时唤醒挂死 —— 已硬件修复（2026-08）**：现象为 RST 唤醒“一次失败一次成功”（`ets` 后无 `load`）、深睡 RTC 定时唤醒永久挂死。根因：ESP8266 **IO7（SPIQ，flash 数据线）悬空**，RST 释放瞬间电平毛刺使 boot ROM 读 flash 偶发失败。**修复：IO7 焊盘 10k 上拉 3.3V**（ESP-12S 未引出 IO7，需从裸片/模块对应焊盘接线）。修复后 RST 单按即醒、深睡定时唤醒每次干净（`rst cause:2 → load` 完整 boot）。附注：flash 提速 40MHz（`board_build.f_flash`）亦可重试，未验证；FPM light sleep 为固件死路（RF 关不睡 / RF 开 `wifi_fpm_do_sleep` 空指针崩溃），勿再尝试。
+> ⚠️ **RST 二次按压 / 深睡定时唤醒挂死 —— 已硬件修复（2026-08）**：现象为 RST 唤醒“一次失败一次成功”（`ets` 后无 `load`）、深睡 RTC 定时唤醒永久挂死。根因：ESP8266 **IO7（SPIQ，flash 数据线）悬空**，RST 释放瞬间电平毛刺使 boot ROM 读 flash 偶发失败。**修复：IO7 焊盘 10k 上拉 3.3V**（ESP-12S 未引出 IO7，需从裸片/模块对应焊盘接线）。修复后 RST 单按即醒、深睡定时唤醒每次干净（`rst cause:2 → load` 完整 boot，多轮实测稳定）。`error: pll_cal exceeds 2ms!!!` 每 boot 必现但纯 cosmetic（不阻塞启动），待后续处理。附注：flash 提速 40MHz（`board_build.f_flash`）亦可重试，未验证；FPM light sleep 为固件死路（RF 关不睡 / RF 开 `wifi_fpm_do_sleep` 空指针崩溃），勿再尝试。
 
 > ✅ **无引脚复用**：下键已取消，IO13 纯屏 SDA。全板引脚全部专用，固件无需分时复用。
 
