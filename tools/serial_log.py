@@ -5,7 +5,7 @@
 import os, sys, time, serial
 from datetime import datetime
 
-PORT = "/dev/cu.wchusbserial10"  # CH340 重新枚举后端口名变化
+PORT = "/dev/cu.wchusbserial11110"  # CH340（端口名随拔插变化，必要时改这里）
 BAUD = 74880
 DURATION = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 
@@ -18,6 +18,7 @@ t0 = time.time()
 buf = bytearray()
 with open(txt_path, "ab") as f:
     f.write(f"=== start {datetime.now().isoformat()} port={PORT} baud={BAUD} ===\n".encode())
+    f.flush()
     try:
         while DURATION <= 0 or time.time() - t0 < DURATION:
             data = ser.read(4096)
@@ -32,6 +33,7 @@ with open(txt_path, "ab") as f:
                     line = repr(head)
                 rel = time.time() - t0
                 f.write(f"[{rel:8.2f}] {line}\n".encode("utf-8", "replace"))
+                f.flush()          # 立即落盘（txt 不再缓冲）
                 print(f"[{rel:8.2f}] {line}", flush=True)
     except KeyboardInterrupt:
         pass

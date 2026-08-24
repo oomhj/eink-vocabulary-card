@@ -107,6 +107,8 @@ ESP-12S 共 16 脚，左 8（下→上：1~8）/ 右 8（下→上：16~9）：
 
 > ✅ **唤醒/复位电路（BOOT 块，2026-08 按 v2 原理图重新核对）**：SW4（唤醒键）经 R33(10k)+D4(MBR0530，阳极朝 RST 侧) 把 RST 网络拉低；RST 网络另有 C18(10nF)+10k 到 GND（隔直滤波，无直流负载）。原理图上 IO15/IO16/RST 三个 net flag 仅视觉相邻，**实为三个独立网络**。**烧录无需断开任何器件**：SW4 断开时 D4 支路开路，USB-TTL 可直接从 RST 焊盘干净复位进下载模式（2026-08 实测：烧录 + 定时深睡唤醒均正常，按键/二极管全程连接）。
 
+> ⚠️ **RST 二次按压 / 深睡定时唤醒挂死 —— 已硬件修复（2026-08）**：现象为 RST 唤醒“一次失败一次成功”（`ets` 后无 `load`）、深睡 RTC 定时唤醒永久挂死。根因：ESP8266 **IO7（SPIQ，flash 数据线）悬空**，RST 释放瞬间电平毛刺使 boot ROM 读 flash 偶发失败。**修复：IO7 焊盘 10k 上拉 3.3V**（ESP-12S 未引出 IO7，需从裸片/模块对应焊盘接线）。修复后 RST 单按即醒、深睡定时唤醒每次干净（`rst cause:2 → load` 完整 boot）。附注：flash 提速 40MHz（`board_build.f_flash`）亦可重试，未验证；FPM light sleep 为固件死路（RF 关不睡 / RF 开 `wifi_fpm_do_sleep` 空指针崩溃），勿再尝试。
+
 > ✅ **无引脚复用**：下键已取消，IO13 纯屏 SDA。全板引脚全部专用，固件无需分时复用。
 
 ## 6. 显示屏连接（P1，FPC 0.5mm 24P）
@@ -253,13 +255,13 @@ IO12 ── R22(1k) ── Q6 栅极 ── R34(10k 下拉) ── GND
 | ESP32 API（参考固件） | ESP8266 替代 |
 |---|---|
 | `Preferences`（NVS） | EEPROM / LittleFS 文件 |
-| `esp_light_sleep_start()` | **固件当前不睡眠**（深睡/FPM light sleep 均实测不可用，见 `word_cards.cpp` 文件尾注记） |
-| `esp_sleep_enable_ext0_wakeup(GPIO_NUM_39)` | SW2(IO0) 轮询 / RST(SW4) 整机重启 |
+| `esp_light_sleep_start()` | `ESP.deepSleep(60s, WAKE_RF_DISABLED)`（唤醒已由 IO7 上拉硬件修复，见上文 BOOT 块注记）；FPM light sleep 不可用 |
+| `esp_sleep_enable_ext0_wakeup(GPIO_NUM_39)` | SW4(RST) 手动刷（深睡中按 RST 复位） |
 | `esp_random()` | `ESP.getRandom()` / `os_random()` |
 | `analogReadMilliVolts()` | `analogRead(A0)`（0–1V，10bit） |
 
-> ✅ **固件已落地（2026-08）**：`src/word_cards.cpp` 为 ESP8266 正式固件（**不睡眠**：60s 定时自动刷词 + SW2(IO0) 按键 + SW4/RST 手动刷；快刷为主每 10 次全刷清残影；计数经 LittleFS 断电保持）。关键要点：
+> ✅ **固件已落地（2026-08）**：`src/word_cards.cpp` 为 ESP8266 正式固件（**深睡版**：`ESP.deepSleep` 60s 自动刷词 + SW4/RST 手动刷；快刷为主每 10 次全刷清残影；计数经 RTC 内存 + LittleFS 断电保持）。关键要点：
 > - **驱动类可切**：`USE_SSD1680`（1=SSD1680 `GxEPD2_213_B74`；0=IL3895 `GxEPD2_213`），两屏接线相同（IO15/IO5/IO2/IO4/IO13/IO14）。
 > - **flash 直读必须 `pgm_read_byte`**：ESP8266 flash 映射区只支持 32 位访问，直接字节读 → LoadStoreError（曾致固件空白）。`src/u8g2_fonts_flash.h` 已把 u8g2 的 `u8x8_pgm_read` 重定义为 `pgm_read_byte`。
 > - 中文字体单用 wqy14（~252KB，1MB 固件上限内）；快刷为主 + 每 10 次全刷清残影（`FULL_EVERY=10`）。
-> - 手动刷词用 **SW2（IO0）或 SW4（RST）**：SW2 轮询按键（松手才刷，一次=一个词）；SW4 整机重启刷词。睡眠方案（深睡唤醒 boot 首跳挂死 / FPM light sleep 崩溃）详见 `word_cards.cpp` 文件尾注记。
+> - 手动刷词用 **SW4（RST）**，一次按下=一个词（IO7 上拉修复后单按即醒，不再需二次按压）。
