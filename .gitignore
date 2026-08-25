@@ -12,3 +12,8 @@ __pycache__/
 
 # 串口采集日志
 logs/
+
+# 本地 CAD/MCP 工具（开源源仓库不需要，勿提交）
+3DShell/
+.mcp.json
+tools/fusion_mcp.py
