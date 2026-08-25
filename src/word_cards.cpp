@@ -165,15 +165,17 @@ static void drawWrappedText(const char* text, int16_t startX, int16_t startY,
 // ---------------- 电池 ----------------
 /**
  * 分压链（2026-08 改版电路，见 电量检测.png / hardware.md §10）：
- *   BAT+ → Q5(SI2305 P-MOS，高边开关) → R15(100K) → (ADC 结点) → R16(150K) → GND
+ *   BAT+ → Q5(SI2305 P-MOS，高边开关) → R15(100K) → (ADC 结点) → R16(30K) → GND
  *   IO12(=0V)：Q1(SI2302) 截止 → Q5 栅极=BAT+(高) → Q5 关断，采样回路断开，静态≈0
  *   IO12(=3.3V)：Q1 导通 → Q5 栅极拉至 GND → Q5 导通(V_GS≈-V_BAT) → BAT+ 接入分压
  *   R14 不在分压链（它是 Q5 栅极拉到 BAT+ 的默认关断电阻，只起门控），C20(10nf) 滤波。
- *   V_adc = V_bat × R16/(R15+R16) = ×150/250 = 0.6，故 V_bat = V_adc × 250/150 = ×5/3。
+ *   V_adc = V_bat × R16/(R15+R16) = ×30/130 = 0.231，故 V_bat = V_adc × 130/30 = ×4.333。
+ *   ★ ESP8266 ADC(TOUT) 量程 0–1.0V（非 3.3V）：比 0.231 保证 4.2V 电池时节点 0.97V 不削顶（冲顶点 4.33V）。
+ *     旧 R16=150K(比0.6) 时 4.2V 节点 2.5V 超 1.0V ADC → raw 削顶 1024，故 R16 改 30K。
  */
-#define BATT_DIV_NUM  250UL    // R15+R16（kΩ）= 100+150（R14 不参与分压）
-#define BATT_DIV_DEN  150UL    // R16（ADC 结点到 GND，kΩ）
-#define BATT_ADC_VREF 3300UL   // ADC 满量程 mV（3.3V 基准；对照万用表校准）
+#define BATT_DIV_NUM  130UL    // R15+R16（kΩ）= 100+30（R14 不参与分压）
+#define BATT_DIV_DEN  30UL     // R16（ADC 结点到 GND，kΩ）= 3×10K 串联
+#define BATT_ADC_VREF 1000UL   // ADC 满量程 mV（ESP8266 TOUT 内部基准 ~1.0V，实测确认）
 #define BATT_SAMPLE_N 16       // 采样次数（取均值降噪）
 
 /** 聚合物锂电池放电曲线（电压 mV -> 百分比，两点间线性插值，照抄参考） */
@@ -184,21 +186,36 @@ static const uint16_t battCurve[][2] = {
 };
 #define BATT_CURVE_N  (sizeof(battCurve) / sizeof(battCurve[0]))
 
-/** 读电池电压（IO12 栅控导通 Q5 高边开关 → A0 采样 → 按分压比 ×250/150(=5/3) 还原，上限 4.2V） */
+/** 读电池电压（IO12 栅控导通 Q5 高边开关 → A0 采样 → 按分压比 ×130/30 还原，上限 4.2V）
+ *  ESP8266 ADC 量程 0–1.0V：分压比 30/130 保证 4.2V 电池时节点 0.97V（不削顶）。 */
 static uint16_t readBatteryMv()
 {
     digitalWrite(PIN_BAT_EN, HIGH);                   // Q1 导通，接通 BAT+ 分压链
-    delay(30);                                        // C20(10nf)×~250k 分压稳定（τ≈0.6ms，留裕量）
+    delay(30);                                        // C20(10nf)×分压戴维南等效(R15‖R16≈23k) 稳定（τ≈0.23ms，留裕量）
     uint32_t sum = 0;
     for (int i = 0; i < BATT_SAMPLE_N; i++) sum += analogRead(A0);
     digitalWrite(PIN_BAT_EN, LOW);                    // 断开分压链，省活跃电流
     uint16_t raw = (uint16_t)(sum / BATT_SAMPLE_N);
-    uint32_t mv = (uint32_t)raw * BATT_ADC_VREF * BATT_DIV_NUM / (1023UL * BATT_DIV_DEN);  // ×250/150
+    uint32_t mv = (uint32_t)raw * BATT_ADC_VREF * BATT_DIV_NUM / (1023UL * BATT_DIV_DEN);  // ×130/30
     if (mv > 4200) mv = 4200;
 #if DEBUG_SERIAL
     Serial.printf("[wc] batt raw=%u → %umV\n", raw, (unsigned)mv);   // 定标：对照万用表电池电压
 #endif
     return (uint16_t)mv;
+}
+
+/** 电池采样诊断（setup 里跑一次）：IO12 拉高/拉低分别读 raw
+ *  raw(HIGH) 明显高于 raw(LOW) → 使能导通正常，看数值定分压比/V_ref
+ *  raw(HIGH)≈raw(LOW)≈15 → Q5 没导通 / 电池没到 BAT+ / A0 没接分压结点 */
+static void battDiag()
+{
+    uint32_t sumH = 0, sumL = 0;
+    digitalWrite(PIN_BAT_EN, HIGH); delay(80);
+    for (int i = 0; i < 16; i++) sumH += analogRead(A0);
+    digitalWrite(PIN_BAT_EN, LOW);  delay(80);
+    for (int i = 0; i < 16; i++) sumL += analogRead(A0);
+    Serial.printf("[wc] batt DIAG: raw(IO12 HIGH)=%u  raw(IO12 LOW)=%u\n",
+                  (unsigned)(sumH / 16), (unsigned)(sumL / 16));
 }
 
 /** 电池电压 -> 百分比（查表 + 线性插值，照抄参考） */
@@ -409,9 +426,12 @@ void setup()
     Serial.begin(74880);                 // 与 boot ROM 波特率一致，rst cause 与日志同屏可读
 #endif
     delay(20);                                // 上电稳定（原 50ms 缩短）
+    pinMode(PIN_BAT_EN, OUTPUT);              // IO12 电池采样使能：必须 OUTPUT，否则 digitalWrite 不真驱动（ESP8266 复位后 GPIO 默认高阻输入），Q1/Q5 导通不了 → 采样≈0
+    digitalWrite(PIN_BAT_EN, LOW);            // 默认低 = 不采样（Q5 关断，静态≈0）
 #if DEBUG_SERIAL
     Serial.printf("[wc] reset: %s\n", ESP.getResetReason().c_str());
 #endif
+    battDiag();                                        // 电池采样诊断（raw IO12 高/低）
 
     // 状态加载：RTC → LittleFS → 默认
     bool rtcOk = stateLoadRtc();
